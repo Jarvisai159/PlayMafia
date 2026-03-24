@@ -25,6 +25,7 @@ export default function HostPage() {
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [timer, setTimer] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [setupError, setSetupError] = useState<string | null>(null);
   const engineRef = useRef<GameEngine | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -125,9 +126,19 @@ export default function HostPage() {
 
   // Auto-create room on mount
   useEffect(() => {
-    createRoom();
+    try {
+      createRoom();
+    } catch (err: unknown) {
+      setSetupError(
+        err instanceof Error ? err.message : "Failed to initialize"
+      );
+    }
     return () => {
-      channelsRef.current.forEach((ch) => getSupabase().removeChannel(ch));
+      try {
+        channelsRef.current.forEach((ch) => getSupabase().removeChannel(ch));
+      } catch {
+        // Supabase not initialized
+      }
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, []);
@@ -224,6 +235,47 @@ export default function HostPage() {
     setRoomCode(null);
     setTimeout(createRoom, 100);
   };
+
+  if (setupError) {
+    return (
+      <main className="min-h-dvh flex items-center justify-center px-6">
+        <div className="max-w-md text-center">
+          <div className="text-5xl mb-6">⚙️</div>
+          <h2 className="text-2xl font-bold mb-4 text-blood-500">
+            Setup Required
+          </h2>
+          <p className="text-white/60 mb-6 text-sm leading-relaxed">
+            This app needs a free Supabase project for real-time
+            communication between devices.
+          </p>
+          <div className="bg-night-700 rounded-xl p-5 text-left text-sm space-y-3 mb-6">
+            <p className="text-white/80">
+              <span className="text-blood-400 font-bold">1.</span> Go to{" "}
+              <span className="text-blue-400 underline">supabase.com</span>{" "}
+              and create a free project
+            </p>
+            <p className="text-white/80">
+              <span className="text-blood-400 font-bold">2.</span> Go to{" "}
+              <span className="text-white/60">Settings → API</span>
+            </p>
+            <p className="text-white/80">
+              <span className="text-blood-400 font-bold">3.</span> Add these
+              env vars in Vercel project settings:
+            </p>
+            <div className="bg-night-900 rounded-lg p-3 font-mono text-xs text-white/50 space-y-1">
+              <p>NEXT_PUBLIC_SUPABASE_URL</p>
+              <p>NEXT_PUBLIC_SUPABASE_ANON_KEY</p>
+            </div>
+            <p className="text-white/80">
+              <span className="text-blood-400 font-bold">4.</span> Redeploy
+              the app
+            </p>
+          </div>
+          <p className="text-white/30 text-xs">{setupError}</p>
+        </div>
+      </main>
+    );
+  }
 
   if (!roomCode || !gameState) {
     return (

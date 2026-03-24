@@ -105,8 +105,17 @@ function PlayerPageInner() {
     setRoomCode(code);
     setError(null);
 
+    let sb;
+    try {
+      sb = getSupabase();
+    } catch (err: unknown) {
+      setError(
+        "Supabase not configured. The host needs to set up environment variables."
+      );
+      return;
+    }
+
     // Subscribe to public channel
-    const sb = getSupabase();
     const publicCh = sb
       .channel(getPublicChannel(code))
       .on("broadcast", { event: "game-state" }, ({ payload }) => {
