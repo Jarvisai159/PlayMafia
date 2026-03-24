@@ -128,7 +128,7 @@ export default function HostPage() {
         setTimeout(() => {
           speak(
             gameState.round === 1
-              ? "Night falls over the town. Everyone, close your eyes. Mafia, open your eyes and choose your target."
+              ? "Night falls over the town. Everyone, close your eyes. Mafia and Terrorist, open your eyes and choose your target."
               : "Night falls. Everyone, close your eyes. Mafia, open your eyes. Choose your target."
           );
         }, 800);
@@ -139,20 +139,24 @@ export default function HostPage() {
       case "NIGHT_DETECTIVE":
         speak("Doctor, close your eyes. Detective, open your eyes. Choose someone to investigate.");
         break;
+      case "NIGHT_SPY":
+        speak("Detective, close your eyes. Spy, open your eyes. Choose someone to surveil.");
+        break;
       case "DAWN":
         playDawnChime();
         setTimeout(() => {
+          const closeEyes = "Close your eyes.";
           if (gameState.nightResult?.killed) {
             speak(
-              `Detective, close your eyes. Everyone, open your eyes. The sun rises. Last night, ${gameState.nightResult.killedPlayerName} was killed by the Mafia.`
+              `${closeEyes} Everyone, open your eyes. The sun rises. Last night, ${gameState.nightResult.killedPlayerName} was killed by the Mafia.`
             );
           } else if (gameState.nightResult?.savedByDoctor) {
             speak(
-              "Detective, close your eyes. Everyone, open your eyes. The sun rises. No one died last night. The Doctor made a crucial save."
+              `${closeEyes} Everyone, open your eyes. The sun rises. No one died last night. The Doctor made a crucial save.`
             );
           } else {
             speak(
-              "Detective, close your eyes. Everyone, open your eyes. The sun rises. It was a peaceful night."
+              `${closeEyes} Everyone, open your eyes. The sun rises. It was a peaceful night.`
             );
           }
         }, 800);
@@ -167,9 +171,11 @@ export default function HostPage() {
         playEliminationSound();
         setTimeout(() => {
           if (gameState.voteResult?.eliminated) {
-            speak(
-              `The town has spoken. ${gameState.voteResult.eliminatedName} has been eliminated. They were ${ROLE_INFO[gameState.voteResult.eliminatedRole!]?.name}.`
-            );
+            let msg = `The town has spoken. ${gameState.voteResult.eliminatedName} has been eliminated. They were ${ROLE_INFO[gameState.voteResult.eliminatedRole!]?.name}.`;
+            if (gameState.voteResult.terroristVictimName) {
+              msg += ` But the Terrorist's final act takes ${gameState.voteResult.terroristVictimName} down as well!`;
+            }
+            speak(msg);
           } else if (gameState.voteResult?.isTie) {
             speak("The vote is tied. No one is eliminated.");
           } else {
@@ -380,7 +386,7 @@ export default function HostPage() {
         )}
 
         {/* ─── NIGHT ───────────────────────────────── */}
-        {(gameState.phase === "NIGHT_MAFIA" || gameState.phase === "NIGHT_DOCTOR" || gameState.phase === "NIGHT_DETECTIVE") && (
+        {(gameState.phase === "NIGHT_MAFIA" || gameState.phase === "NIGHT_DOCTOR" || gameState.phase === "NIGHT_DETECTIVE" || gameState.phase === "NIGHT_SPY") && (
           <motion.div key="night" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="relative z-10 text-center">
             <motion.div
               animate={{ opacity: [0.4, 1, 0.4] }}
@@ -398,6 +404,7 @@ export default function HostPage() {
               {gameState.phase === "NIGHT_MAFIA" && "The Mafia is choosing a target..."}
               {gameState.phase === "NIGHT_DOCTOR" && "The Doctor is choosing who to save..."}
               {gameState.phase === "NIGHT_DETECTIVE" && "The Detective is investigating..."}
+              {gameState.phase === "NIGHT_SPY" && "The Spy is surveilling..."}
             </motion.p>
             <button onClick={handleForceResolve} className="py-2.5 px-8 bg-bg-elevated hover:bg-bg-hover text-muted-light text-xs uppercase tracking-widest rounded-lg transition-colors border border-white/5">
               Force Advance
@@ -519,6 +526,14 @@ export default function HostPage() {
                     {ROLE_INFO[gameState.voteResult.eliminatedRole!]?.name}
                   </p>
                 </div>
+                {gameState.voteResult.terroristVictimName && (
+                  <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 1 }}
+                    className="bg-bg-card border border-orange-500/30 rounded-lg p-5 max-w-sm mx-auto mt-4">
+                    <p className="text-orange-400 text-xs uppercase tracking-wider font-bold mb-1">Terrorist&apos;s Final Act</p>
+                    <p className="text-white text-lg font-black uppercase">{gameState.voteResult.terroristVictimName}</p>
+                    <p className="text-muted-light text-xs mt-1">was taken down as well</p>
+                  </motion.div>
+                )}
               </motion.div>
             ) : (
               <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}>

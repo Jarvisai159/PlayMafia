@@ -30,6 +30,7 @@ function PlayerPageInner() {
   const [actionPrompt, setActionPrompt] = useState<PrivateMessage | null>(null);
   const [actionSubmitted, setActionSubmitted] = useState(false);
   const [detectiveResult, setDetectiveResult] = useState<{ playerName: string; isMafia: boolean } | null>(null);
+  const [spyResult, setSpyResult] = useState<{ playerName: string; wasTargeted: boolean } | null>(null);
   const [hasVoted, setHasVoted] = useState(false);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -113,6 +114,8 @@ function PlayerPageInner() {
           setActionSubmitted(false);
         } else if (msg.type === "detective-result" && msg.investigationResult) {
           setDetectiveResult(msg.investigationResult);
+        } else if (msg.type === "spy-result" && msg.spyResult) {
+          setSpyResult(msg.spyResult);
         } else if (msg.type === "action-confirmed") {
           setActionSubmitted(true);
         }
@@ -321,6 +324,14 @@ function PlayerPageInner() {
                           </p>
                         </div>
                       )}
+                      {spyResult && (
+                        <div className="mt-3 p-3 bg-purple-950/20 border border-purple-500/20 rounded-lg">
+                          <p className="text-purple-400 text-xs">
+                            Surveillance: <strong>{spyResult.playerName}</strong>{" "}
+                            <strong>{spyResult.wasTargeted ? "WAS targeted by Mafia" : "was NOT targeted"}</strong>
+                          </p>
+                        </div>
+                      )}
                     </>
                   )}
                 </motion.div>
@@ -436,6 +447,8 @@ function NightActionUI({
     "mafia-kill": { title: "Choose Target", symbol: "M", color: "#C41E3A" },
     "doctor-save": { title: "Choose Who to Save", symbol: "D", color: "#2D8B46" },
     "detective-investigate": { title: "Investigate", symbol: "?", color: "#2563EB" },
+    "spy-surveil": { title: "Surveil a Player", symbol: "S", color: "#7C3AED" },
+    "terrorist-choose": { title: "Choose Target", symbol: "T", color: "#E85D04" },
   };
   const info = labels[prompt.actionType!] ?? labels["mafia-kill"];
 
