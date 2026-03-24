@@ -88,29 +88,32 @@ export interface PlayerAction {
   targetId?: string;
 }
 
-export const ROLE_INFO: Record<Role, { name: string; emoji: string; color: string; description: string }> = {
+export const ROLE_INFO: Record<
+  Role,
+  { name: string; symbol: string; color: string; description: string }
+> = {
   MAFIA: {
     name: "Mafia",
-    emoji: "🔫",
-    color: "#dc2626",
+    symbol: "M",
+    color: "#C41E3A",
     description: "Eliminate villagers at night. Stay hidden during the day.",
   },
   DOCTOR: {
     name: "Doctor",
-    emoji: "💉",
-    color: "#22c55e",
+    symbol: "D",
+    color: "#2D8B46",
     description: "Choose one player to protect each night.",
   },
   DETECTIVE: {
     name: "Detective",
-    emoji: "🔍",
-    color: "#3b82f6",
+    symbol: "?",
+    color: "#2563EB",
     description: "Investigate one player each night to learn their allegiance.",
   },
   VILLAGER: {
     name: "Villager",
-    emoji: "👤",
-    color: "#a78bfa",
+    symbol: "V",
+    color: "#9CA3AF",
     description: "Find and vote out the Mafia during the day.",
   },
 };

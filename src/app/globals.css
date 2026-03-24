@@ -2,48 +2,28 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --bg-primary: #05050a;
-  --bg-card: #12121f;
-}
-
 * {
   -webkit-tap-highlight-color: transparent;
 }
 
 html {
-  background: var(--bg-primary);
+  background: #0d0d0d;
   color-scheme: dark;
 }
 
 body {
-  background: var(--bg-primary);
-  color: white;
+  background: #0d0d0d;
+  color: #e5e5e5;
   min-height: 100dvh;
   overflow-x: hidden;
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-    sans-serif;
-}
-
-@layer utilities {
-  .text-balance {
-    text-wrap: balance;
-  }
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
 /* Scrollbar */
-::-webkit-scrollbar {
-  width: 4px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: #333;
-  border-radius: 2px;
-}
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
 
-/* Safe area for mobile */
 .safe-bottom {
   padding-bottom: env(safe-area-inset-bottom, 16px);
 }

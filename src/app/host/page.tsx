@@ -13,11 +13,12 @@ import {
 } from "@/lib/supabase";
 import { generateRoomCode } from "@/lib/utils";
 import {
+  speak,
+  stopSpeech,
   playNightChime,
   playDawnChime,
   playEliminationSound,
   playVictorySound,
-  playVoteSound,
 } from "@/lib/sounds";
 
 export default function HostPage() {
@@ -30,35 +31,6 @@ export default function HostPage() {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const channelsRef = useRef<any[]>([]);
-
-  const broadcastState = useCallback(
-    (state: GameState) => {
-      if (!roomCode) return;
-      setGameState(state);
-      const sb = getSupabase();
-      const ch = sb.channel(getPublicChannel(roomCode));
-      ch.send({
-        type: "broadcast",
-        event: "game-state",
-        payload: state,
-      });
-    },
-    [roomCode]
-  );
-
-  const sendPrivateMessage = useCallback(
-    (playerId: string, msg: PrivateMessage) => {
-      if (!roomCode) return;
-      const sb = getSupabase();
-      const ch = sb.channel(getPlayerChannel(roomCode, playerId));
-      ch.send({
-        type: "broadcast",
-        event: "private-msg",
-        payload: msg,
-      });
-    },
-    [roomCode]
-  );
 
   // Create room
   const createRoom = useCallback(() => {
@@ -86,12 +58,8 @@ export default function HostPage() {
     );
     engineRef.current = engine;
 
-    // Subscribe to public channel (for presence)
-    const publicCh = sb
-      .channel(getPublicChannel(code))
-      .subscribe();
+    const publicCh = sb.channel(getPublicChannel(code)).subscribe();
 
-    // Subscribe to host channel for player actions
     const hostCh = sb
       .channel(getHostChannel(code))
       .on("broadcast", { event: "player-action" }, ({ payload }) => {
@@ -129,21 +97,20 @@ export default function HostPage() {
     try {
       createRoom();
     } catch (err: unknown) {
-      setSetupError(
-        err instanceof Error ? err.message : "Failed to initialize"
-      );
+      setSetupError(err instanceof Error ? err.message : "Failed to initialize");
     }
     return () => {
+      stopSpeech();
       try {
         channelsRef.current.forEach((ch) => getSupabase().removeChannel(ch));
       } catch {
-        // Supabase not initialized
+        // not initialized
       }
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, []);
 
-  // Sound effects on phase changes
+  // ─── Voice narration on phase changes ─────────────────
   const prevPhaseRef = useRef<string | null>(null);
   useEffect(() => {
     if (!gameState) return;
@@ -152,31 +119,93 @@ export default function HostPage() {
     prevPhaseRef.current = curr;
     if (prev === curr) return;
 
-    if (curr === "NIGHT_MAFIA") playNightChime();
-    if (curr === "DAWN") playDawnChime();
-    if (curr === "ELIMINATION") playEliminationSound();
-    if (curr === "GAME_OVER") playVictorySound();
+    switch (curr) {
+      case "ROLE_REVEAL":
+        speak("Roles have been assigned. Check your phones now. Do not show anyone.");
+        break;
+      case "NIGHT_MAFIA":
+        playNightChime();
+        setTimeout(() => {
+          speak(
+            gameState.round === 1
+              ? "Night falls over the town. Everyone, close your eyes. Mafia, open your eyes and choose your target."
+              : "Night falls. Everyone, close your eyes. Mafia, open your eyes. Choose your target."
+          );
+        }, 800);
+        break;
+      case "NIGHT_DOCTOR":
+        speak("Mafia, close your eyes. Doctor, open your eyes. Choose someone to protect.");
+        break;
+      case "NIGHT_DETECTIVE":
+        speak("Doctor, close your eyes. Detective, open your eyes. Choose someone to investigate.");
+        break;
+      case "DAWN":
+        playDawnChime();
+        setTimeout(() => {
+          if (gameState.nightResult?.killed) {
+            speak(
+              `Detective, close your eyes. Everyone, open your eyes. The sun rises. Last night, ${gameState.nightResult.killedPlayerName} was killed by the Mafia.`
+            );
+          } else if (gameState.nightResult?.savedByDoctor) {
+            speak(
+              "Detective, close your eyes. Everyone, open your eyes. The sun rises. No one died last night. The Doctor made a crucial save."
+            );
+          } else {
+            speak(
+              "Detective, close your eyes. Everyone, open your eyes. The sun rises. It was a peaceful night."
+            );
+          }
+        }, 800);
+        break;
+      case "DAY_DISCUSSION":
+        speak("Discussion begins now. Talk amongst yourselves. Who do you suspect?");
+        break;
+      case "DAY_VOTING":
+        speak("Time to vote. Use your phones to cast your vote now.");
+        break;
+      case "ELIMINATION":
+        playEliminationSound();
+        setTimeout(() => {
+          if (gameState.voteResult?.eliminated) {
+            speak(
+              `The town has spoken. ${gameState.voteResult.eliminatedName} has been eliminated. They were ${ROLE_INFO[gameState.voteResult.eliminatedRole!]?.name}.`
+            );
+          } else if (gameState.voteResult?.isTie) {
+            speak("The vote is tied. No one is eliminated.");
+          } else {
+            speak("No majority was reached. No one is eliminated.");
+          }
+        }, 600);
+        break;
+      case "GAME_OVER":
+        playVictorySound();
+        setTimeout(() => {
+          speak(
+            gameState.winner === "VILLAGE"
+              ? "Game over. The Village wins! All Mafia members have been eliminated."
+              : "Game over. The Mafia wins! They have taken over the town."
+          );
+        }, 800);
+        break;
+    }
   }, [gameState?.phase]);
 
-  // Timer management
-  const startTimer = useCallback(
-    (seconds: number, onComplete: () => void) => {
-      if (timerRef.current) clearInterval(timerRef.current);
-      setTimer(seconds);
-      timerRef.current = setInterval(() => {
-        setTimer((prev) => {
-          if (prev === null || prev <= 1) {
-            clearInterval(timerRef.current!);
-            timerRef.current = null;
-            onComplete();
-            return null;
-          }
-          return prev - 1;
-        });
-      }, 1000);
-    },
-    []
-  );
+  // ─── Timer ────────────────────────────────────────────
+  const startTimer = useCallback((seconds: number, onComplete: () => void) => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    setTimer(seconds);
+    timerRef.current = setInterval(() => {
+      setTimer((prev) => {
+        if (prev === null || prev <= 1) {
+          clearInterval(timerRef.current!);
+          timerRef.current = null;
+          onComplete();
+          return null;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  }, []);
 
   const stopTimer = useCallback(() => {
     if (timerRef.current) {
@@ -186,7 +215,7 @@ export default function HostPage() {
     setTimer(null);
   }, []);
 
-  // Host actions
+  // ─── Host Actions ─────────────────────────────────────
   const handleStartGame = () => {
     try {
       engineRef.current?.startGame();
@@ -196,9 +225,7 @@ export default function HostPage() {
     }
   };
 
-  const handleProceedFromRoles = () => {
-    engineRef.current?.startNight();
-  };
+  const handleProceedFromRoles = () => engineRef.current?.startNight();
 
   const handleProceedToDayDiscussion = () => {
     engineRef.current?.startDayDiscussion();
@@ -220,12 +247,13 @@ export default function HostPage() {
     engineRef.current?.forceResolveCurrentPhase();
   };
 
-  const handleNextRound = () => {
-    engineRef.current?.proceedAfterElimination();
-  };
+  const handleNextRound = () => engineRef.current?.proceedAfterElimination();
 
   const handleNewGame = () => {
-    channelsRef.current.forEach((ch) => getSupabase().removeChannel(ch));
+    stopSpeech();
+    try {
+      channelsRef.current.forEach((ch) => getSupabase().removeChannel(ch));
+    } catch { /* */ }
     if (timerRef.current) clearInterval(timerRef.current);
     channelsRef.current = [];
     engineRef.current = null;
@@ -236,42 +264,28 @@ export default function HostPage() {
     setTimeout(createRoom, 100);
   };
 
+  // ─── Setup Error ──────────────────────────────────────
   if (setupError) {
     return (
       <main className="min-h-dvh flex items-center justify-center px-6">
         <div className="max-w-md text-center">
-          <div className="text-5xl mb-6">⚙️</div>
-          <h2 className="text-2xl font-bold mb-4 text-blood-500">
+          <h2 className="text-xl font-bold mb-4 text-accent-red uppercase tracking-wider">
             Setup Required
           </h2>
-          <p className="text-white/60 mb-6 text-sm leading-relaxed">
-            This app needs a free Supabase project for real-time
-            communication between devices.
+          <p className="text-muted-light mb-6 text-sm">
+            This app needs a free Supabase project for real-time communication.
           </p>
-          <div className="bg-night-700 rounded-xl p-5 text-left text-sm space-y-3 mb-6">
-            <p className="text-white/80">
-              <span className="text-blood-400 font-bold">1.</span> Go to{" "}
-              <span className="text-blue-400 underline">supabase.com</span>{" "}
-              and create a free project
-            </p>
-            <p className="text-white/80">
-              <span className="text-blood-400 font-bold">2.</span> Go to{" "}
-              <span className="text-white/60">Settings → API</span>
-            </p>
-            <p className="text-white/80">
-              <span className="text-blood-400 font-bold">3.</span> Add these
-              env vars in Vercel project settings:
-            </p>
-            <div className="bg-night-900 rounded-lg p-3 font-mono text-xs text-white/50 space-y-1">
+          <div className="bg-bg-card border border-white/10 rounded-lg p-5 text-left text-sm space-y-3 mb-6">
+            <p className="text-white/80"><span className="text-accent-red font-bold">1.</span> Go to supabase.com — create a free project</p>
+            <p className="text-white/80"><span className="text-accent-red font-bold">2.</span> Settings &rarr; API Keys</p>
+            <p className="text-white/80"><span className="text-accent-red font-bold">3.</span> Add env vars in Vercel:</p>
+            <div className="bg-bg-primary rounded p-3 font-mono text-xs text-muted-light space-y-1">
               <p>NEXT_PUBLIC_SUPABASE_URL</p>
               <p>NEXT_PUBLIC_SUPABASE_ANON_KEY</p>
             </div>
-            <p className="text-white/80">
-              <span className="text-blood-400 font-bold">4.</span> Redeploy
-              the app
-            </p>
+            <p className="text-white/80"><span className="text-accent-red font-bold">4.</span> Redeploy</p>
           </div>
-          <p className="text-white/30 text-xs">{setupError}</p>
+          <p className="text-muted text-xs">{setupError}</p>
         </div>
       </main>
     );
@@ -280,236 +294,145 @@ export default function HostPage() {
   if (!roomCode || !gameState) {
     return (
       <div className="min-h-dvh flex items-center justify-center">
-        <div className="animate-pulse text-white/50 text-lg">
-          Creating room...
-        </div>
+        <div className="animate-pulse text-muted text-sm uppercase tracking-widest">Creating room...</div>
       </div>
     );
   }
 
-  const joinUrl =
-    typeof window !== "undefined"
-      ? `${window.location.origin}/play?code=${roomCode}`
-      : "";
+  const joinUrl = typeof window !== "undefined" ? `${window.location.origin}/play?code=${roomCode}` : "";
+  const aliveCount = gameState.players.filter((p) => p.isAlive).length;
 
   return (
     <main className="min-h-dvh flex flex-col items-center justify-center px-4 py-8 relative overflow-hidden">
-      {/* Background */}
+      {/* Background atmospherics */}
       <div className="absolute inset-0 pointer-events-none">
         {gameState.phase.startsWith("NIGHT") && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="absolute inset-0 bg-gradient-to-b from-blue-950/20 to-night-950"
-          />
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="absolute inset-0 bg-gradient-to-b from-blue-950/10 via-transparent to-transparent" />
         )}
-        {gameState.phase === "DAWN" && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="absolute inset-0 bg-gradient-to-b from-amber-950/10 to-night-950"
-          />
+        {(gameState.phase === "DAWN" || gameState.phase === "DAY_DISCUSSION" || gameState.phase === "DAY_VOTING") && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="absolute inset-0 bg-gradient-to-b from-amber-950/5 via-transparent to-transparent" />
         )}
-        {(gameState.phase === "DAY_DISCUSSION" ||
-          gameState.phase === "DAY_VOTING") && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="absolute inset-0 bg-gradient-to-b from-amber-900/5 to-night-950"
-          />
-        )}
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-accent-darkred/5 blur-[150px] rounded-full" />
       </div>
 
       <AnimatePresence mode="wait">
-        {/* ─── LOBBY ──────────────────────────────────── */}
+        {/* ─── LOBBY ───────────────────────────────── */}
         {gameState.phase === "LOBBY" && (
-          <motion.div
-            key="lobby"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="relative z-10 w-full max-w-2xl text-center"
-          >
-            <h2 className="text-3xl font-bold mb-1">
-              Room <span className="text-blood-500">{roomCode}</span>
-            </h2>
-            <p className="text-white/40 text-sm mb-8">
-              Scan to join or enter code on your phone
-            </p>
+          <motion.div key="lobby" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="relative z-10 w-full max-w-2xl text-center">
+            <p className="text-muted text-xs uppercase tracking-[0.3em] mb-2">Room Code</p>
+            <h2 className="text-5xl font-black tracking-[0.15em] text-white mb-8">{roomCode}</h2>
 
-            <div className="flex flex-col sm:flex-row gap-8 items-center justify-center mb-8">
-              {/* QR Code */}
-              <div className="bg-white p-4 rounded-2xl">
-                <QRCodeSVG value={joinUrl} size={180} level="M" />
+            <div className="flex flex-col sm:flex-row gap-8 items-center justify-center mb-10">
+              <div className="bg-white p-3 rounded-lg">
+                <QRCodeSVG value={joinUrl} size={160} level="M" bgColor="#ffffff" fgColor="#0d0d0d" />
               </div>
 
-              {/* Player list */}
-              <div className="flex-1 min-w-[200px]">
-                <h3 className="text-white/60 text-sm uppercase tracking-wider mb-3">
-                  Players ({gameState.players.length})
-                </h3>
-                <div className="space-y-2">
+              <div className="flex-1 min-w-[220px] text-left">
+                <p className="text-muted text-xs uppercase tracking-[0.2em] mb-4">
+                  Players &mdash; {gameState.players.length}
+                </p>
+                <div className="space-y-1.5">
                   {gameState.players.length === 0 && (
-                    <p className="text-white/20 text-sm">
-                      Waiting for players...
-                    </p>
+                    <p className="text-muted text-sm">Waiting for players...</p>
                   )}
                   {gameState.players.map((p, i) => (
                     <motion.div
                       key={p.id}
                       initial={{ opacity: 0, x: -10 }}
                       animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: i * 0.05 }}
-                      className="flex items-center gap-3 bg-night-700/50 rounded-xl px-4 py-3"
+                      transition={{ delay: i * 0.04 }}
+                      className="flex items-center gap-3 bg-bg-card border border-white/5 rounded-lg px-4 py-2.5"
                     >
-                      <div className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-sm font-bold">
-                        {p.name[0].toUpperCase()}
+                      <div className="w-7 h-7 rounded bg-accent-red/20 text-accent-red flex items-center justify-center text-xs font-bold uppercase">
+                        {p.name[0]}
                       </div>
-                      <span className="font-medium">{p.name}</span>
+                      <span className="text-sm font-medium text-white/90">{p.name}</span>
                     </motion.div>
                   ))}
                 </div>
               </div>
             </div>
 
-            {error && (
-              <p className="text-blood-400 text-sm mb-4">{error}</p>
-            )}
+            {error && <p className="text-accent-red text-sm mb-4">{error}</p>}
 
             <button
               onClick={handleStartGame}
               disabled={gameState.players.length < 4}
-              className="py-4 px-12 bg-blood-500 hover:bg-blood-600 disabled:bg-white/10 disabled:text-white/30 text-white text-lg font-semibold rounded-2xl transition-colors"
+              className="py-3.5 px-14 bg-accent-red hover:bg-accent-crimson disabled:bg-bg-elevated disabled:text-muted text-white text-sm font-bold uppercase tracking-widest rounded-lg transition-colors"
             >
               {gameState.players.length < 4
-                ? `Need ${4 - gameState.players.length} more player${4 - gameState.players.length > 1 ? "s" : ""}`
+                ? `Need ${4 - gameState.players.length} more`
                 : "Start Game"}
             </button>
           </motion.div>
         )}
 
-        {/* ─── ROLE REVEAL ────────────────────────────── */}
+        {/* ─── ROLE REVEAL ─────────────────────────── */}
         {gameState.phase === "ROLE_REVEAL" && (
-          <motion.div
-            key="role-reveal"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="relative z-10 text-center"
-          >
-            <motion.div
-              initial={{ scale: 0.8, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              transition={{ duration: 0.6 }}
-            >
-              <h2 className="text-4xl font-bold mb-4">Roles Assigned</h2>
-              <p className="text-white/50 text-lg mb-8">
-                Check your phones — do not show anyone.
-              </p>
-              <button
-                onClick={handleProceedFromRoles}
-                className="py-4 px-12 bg-blood-500 hover:bg-blood-600 text-white text-lg font-semibold rounded-2xl transition-colors"
-              >
-                Begin Night 1
-              </button>
-            </motion.div>
+          <motion.div key="role-reveal" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="relative z-10 text-center">
+            <div className="w-12 h-px bg-accent-red mx-auto mb-8" />
+            <h2 className="text-3xl font-black uppercase tracking-wider mb-3">Roles Assigned</h2>
+            <p className="text-muted-light text-sm mb-10">Check your phones. Do not show anyone.</p>
+            <button onClick={handleProceedFromRoles} className="py-3.5 px-14 bg-accent-red hover:bg-accent-crimson text-white text-sm font-bold uppercase tracking-widest rounded-lg transition-colors">
+              Begin Night 1
+            </button>
           </motion.div>
         )}
 
-        {/* ─── NIGHT ──────────────────────────────────── */}
-        {(gameState.phase === "NIGHT_MAFIA" ||
-          gameState.phase === "NIGHT_DOCTOR" ||
-          gameState.phase === "NIGHT_DETECTIVE") && (
-          <motion.div
-            key="night"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="relative z-10 text-center"
-          >
+        {/* ─── NIGHT ───────────────────────────────── */}
+        {(gameState.phase === "NIGHT_MAFIA" || gameState.phase === "NIGHT_DOCTOR" || gameState.phase === "NIGHT_DETECTIVE") && (
+          <motion.div key="night" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="relative z-10 text-center">
             <motion.div
-              animate={{ opacity: [0.5, 1, 0.5] }}
-              transition={{ duration: 3, repeat: Infinity }}
-              className="text-6xl mb-6"
-            >
-              🌙
-            </motion.div>
-            <h2 className="text-4xl font-bold mb-2">
-              Night {gameState.round}
-            </h2>
-            <p className="text-white/40 text-lg mb-2">
-              Everyone close your eyes.
-            </p>
+              animate={{ opacity: [0.4, 1, 0.4] }}
+              transition={{ duration: 4, repeat: Infinity }}
+              className="w-3 h-3 rounded-full bg-blue-400 mx-auto mb-8"
+            />
+            <h2 className="text-4xl font-black uppercase tracking-wider mb-2">Night {gameState.round}</h2>
+            <p className="text-muted text-sm uppercase tracking-widest mb-2">Everyone close your eyes</p>
             <motion.p
               key={gameState.phase}
-              initial={{ opacity: 0, y: 5 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="text-white/60 text-base mb-8"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="text-muted-light text-sm mb-10"
             >
               {gameState.phase === "NIGHT_MAFIA" && "The Mafia is choosing a target..."}
               {gameState.phase === "NIGHT_DOCTOR" && "The Doctor is choosing who to save..."}
               {gameState.phase === "NIGHT_DETECTIVE" && "The Detective is investigating..."}
             </motion.p>
-            <button
-              onClick={handleForceResolve}
-              className="py-3 px-8 bg-white/10 hover:bg-white/15 text-white/60 text-sm rounded-xl transition-colors"
-            >
+            <button onClick={handleForceResolve} className="py-2.5 px-8 bg-bg-elevated hover:bg-bg-hover text-muted-light text-xs uppercase tracking-widest rounded-lg transition-colors border border-white/5">
               Force Advance
             </button>
           </motion.div>
         )}
 
-        {/* ─── DAWN ───────────────────────────────────── */}
+        {/* ─── DAWN ────────────────────────────────── */}
         {gameState.phase === "DAWN" && (
-          <motion.div
-            key="dawn"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="relative z-10 text-center"
-          >
-            <motion.div
-              initial={{ scale: 0.8, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              transition={{ duration: 0.8 }}
-            >
-              <div className="text-6xl mb-6">🌅</div>
-              <h2 className="text-4xl font-bold mb-4">Dawn Breaks</h2>
+          <motion.div key="dawn" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="relative z-10 text-center">
+            <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ duration: 0.8 }}>
+              <div className="w-3 h-3 rounded-full bg-amber-400 mx-auto mb-8" />
+              <h2 className="text-3xl font-black uppercase tracking-wider mb-6">Dawn Breaks</h2>
 
               {gameState.nightResult?.killed ? (
-                <div>
-                  <p className="text-blood-400 text-2xl font-bold mb-2">
-                    {gameState.nightResult.killedPlayerName} was killed.
+                <div className="bg-bg-card border border-accent-red/30 rounded-lg p-6 max-w-sm mx-auto mb-8">
+                  <p className="text-accent-red text-xl font-bold uppercase tracking-wide mb-1">
+                    {gameState.nightResult.killedPlayerName}
                   </p>
-                  <p className="text-white/40">
-                    The Mafia claimed a victim in the night.
-                  </p>
+                  <p className="text-muted-light text-sm">was killed by the Mafia</p>
                 </div>
               ) : gameState.nightResult?.savedByDoctor ? (
-                <div>
-                  <p className="text-green-400 text-2xl font-bold mb-2">
-                    No one died!
-                  </p>
-                  <p className="text-white/40">
-                    The Doctor saved someone in the nick of time.
-                  </p>
+                <div className="bg-bg-card border border-green-700/30 rounded-lg p-6 max-w-sm mx-auto mb-8">
+                  <p className="text-green-500 text-xl font-bold uppercase tracking-wide mb-1">No One Died</p>
+                  <p className="text-muted-light text-sm">The Doctor made a save</p>
                 </div>
               ) : (
-                <div>
-                  <p className="text-white/60 text-2xl font-bold mb-2">
-                    A peaceful night.
-                  </p>
-                  <p className="text-white/40">No one was harmed.</p>
+                <div className="bg-bg-card border border-white/10 rounded-lg p-6 max-w-sm mx-auto mb-8">
+                  <p className="text-white/70 text-xl font-bold uppercase tracking-wide mb-1">Peaceful Night</p>
+                  <p className="text-muted-light text-sm">No one was harmed</p>
                 </div>
               )}
 
-              {gameState.winner ? (
-                <div className="mt-8" />
-              ) : (
-                <button
-                  onClick={handleProceedToDayDiscussion}
-                  className="mt-8 py-4 px-12 bg-blood-500 hover:bg-blood-600 text-white text-lg font-semibold rounded-2xl transition-colors"
-                >
+              {!gameState.winner && (
+                <button onClick={handleProceedToDayDiscussion} className="py-3.5 px-14 bg-accent-red hover:bg-accent-crimson text-white text-sm font-bold uppercase tracking-widest rounded-lg transition-colors">
                   Start Discussion
                 </button>
               )}
@@ -517,207 +440,136 @@ export default function HostPage() {
           </motion.div>
         )}
 
-        {/* ─── DAY DISCUSSION ─────────────────────────── */}
+        {/* ─── DAY DISCUSSION ──────────────────────── */}
         {gameState.phase === "DAY_DISCUSSION" && (
-          <motion.div
-            key="discussion"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="relative z-10 text-center w-full max-w-md"
-          >
-            <div className="text-5xl mb-4">💬</div>
-            <h2 className="text-3xl font-bold mb-2">Discussion</h2>
-            <p className="text-white/40 mb-6">
-              Debate who might be Mafia.
-            </p>
+          <motion.div key="discussion" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="relative z-10 text-center w-full max-w-md">
+            <h2 className="text-3xl font-black uppercase tracking-wider mb-2">Discussion</h2>
+            <p className="text-muted text-sm mb-6">Debate who might be Mafia</p>
 
             {timer !== null && (
-              <div className="mb-6">
-                <div className="text-5xl font-bold tabular-nums text-white/90">
-                  {Math.floor(timer / 60)}:{String(timer % 60).padStart(2, "0")}
-                </div>
+              <div className="text-5xl font-black tabular-nums text-white/90 mb-6">
+                {Math.floor(timer / 60)}:{String(timer % 60).padStart(2, "0")}
               </div>
             )}
 
-            <AlivePlayerList players={gameState.players} />
+            <PlayerStatusList players={gameState.players} />
 
-            <button
-              onClick={handleSkipToVoting}
-              className="mt-6 py-4 px-12 bg-blood-500 hover:bg-blood-600 text-white text-lg font-semibold rounded-2xl transition-colors"
-            >
+            <button onClick={handleSkipToVoting} className="mt-8 py-3.5 px-14 bg-accent-red hover:bg-accent-crimson text-white text-sm font-bold uppercase tracking-widest rounded-lg transition-colors">
               Skip to Voting
             </button>
           </motion.div>
         )}
 
-        {/* ─── DAY VOTING ─────────────────────────────── */}
+        {/* ─── DAY VOTING ──────────────────────────── */}
         {gameState.phase === "DAY_VOTING" && (
-          <motion.div
-            key="voting"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="relative z-10 text-center w-full max-w-md"
-          >
-            <div className="text-5xl mb-4">🗳️</div>
-            <h2 className="text-3xl font-bold mb-2">Vote Now</h2>
-            <p className="text-white/40 mb-6">Vote on your phone.</p>
+          <motion.div key="voting" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="relative z-10 text-center w-full max-w-md">
+            <h2 className="text-3xl font-black uppercase tracking-wider mb-2">Vote Now</h2>
+            <p className="text-muted text-sm mb-6">Cast your vote on your phone</p>
 
             {timer !== null && (
-              <div className="mb-4">
-                <div className="text-4xl font-bold tabular-nums text-white/90">
-                  {Math.floor(timer / 60)}:{String(timer % 60).padStart(2, "0")}
-                </div>
+              <div className="text-4xl font-black tabular-nums text-white/90 mb-4">
+                {Math.floor(timer / 60)}:{String(timer % 60).padStart(2, "0")}
               </div>
             )}
 
-            {/* Live tally */}
-            <div className="space-y-2 mb-6">
-              {gameState.players
-                .filter((p) => p.isAlive)
-                .map((p) => {
-                  const votes = gameState.voteTally?.[p.id] ?? 0;
-                  return (
-                    <div
-                      key={p.id}
-                      className="flex items-center justify-between bg-night-700/50 rounded-xl px-4 py-3"
-                    >
-                      <span className="font-medium">{p.name}</span>
-                      <span className="text-blood-400 font-bold">
-                        {votes > 0 ? `${votes} vote${votes > 1 ? "s" : ""}` : ""}
-                      </span>
+            <div className="space-y-1.5 mb-6">
+              {gameState.players.filter((p) => p.isAlive).map((p) => {
+                const votes = gameState.voteTally?.[p.id] ?? 0;
+                const pct = aliveCount > 0 ? (votes / aliveCount) * 100 : 0;
+                return (
+                  <div key={p.id} className="relative bg-bg-card border border-white/5 rounded-lg px-4 py-3 overflow-hidden">
+                    {votes > 0 && (
+                      <motion.div
+                        initial={{ width: 0 }}
+                        animate={{ width: `${pct}%` }}
+                        className="absolute inset-y-0 left-0 bg-accent-red/15"
+                      />
+                    )}
+                    <div className="relative flex items-center justify-between">
+                      <span className="text-sm font-medium">{p.name}</span>
+                      {votes > 0 && <span className="text-accent-red text-sm font-bold">{votes}</span>}
                     </div>
-                  );
-                })}
+                  </div>
+                );
+              })}
             </div>
 
-            <p className="text-white/30 text-sm mb-4">
-              {Object.keys(gameState.votes ?? {}).length} /{" "}
-              {gameState.players.filter((p) => p.isAlive).length} voted
+            <p className="text-muted text-xs uppercase tracking-wider mb-6">
+              {Object.keys(gameState.votes ?? {}).length} / {aliveCount} voted
             </p>
 
-            <button
-              onClick={handleForceResolve}
-              className="py-3 px-8 bg-white/10 hover:bg-white/15 text-white/60 text-sm rounded-xl transition-colors"
-            >
+            <button onClick={handleForceResolve} className="py-2.5 px-8 bg-bg-elevated hover:bg-bg-hover text-muted-light text-xs uppercase tracking-widest rounded-lg transition-colors border border-white/5">
               Force End Vote
             </button>
           </motion.div>
         )}
 
-        {/* ─── ELIMINATION ────────────────────────────── */}
+        {/* ─── ELIMINATION ─────────────────────────── */}
         {gameState.phase === "ELIMINATION" && (
-          <motion.div
-            key="elimination"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="relative z-10 text-center"
-          >
+          <motion.div key="elimination" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="relative z-10 text-center">
             {gameState.voteResult?.eliminated ? (
-              <motion.div
-                initial={{ scale: 0.8, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                transition={{ duration: 0.6 }}
-              >
-                <div className="text-6xl mb-6">⚖️</div>
-                <h2 className="text-3xl font-bold mb-2">
-                  {gameState.voteResult.eliminatedName} has been eliminated.
-                </h2>
-                <p className="text-white/50 text-xl mb-2">
-                  They were{" "}
-                  <span
-                    style={{
-                      color:
-                        ROLE_INFO[gameState.voteResult.eliminatedRole!]?.color,
-                    }}
-                  >
+              <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ duration: 0.5 }}>
+                <div className="w-12 h-px bg-accent-red mx-auto mb-8" />
+                <h2 className="text-2xl font-black uppercase tracking-wider mb-2">Eliminated</h2>
+                <div className="bg-bg-card border border-accent-red/30 rounded-lg p-6 max-w-sm mx-auto mb-2">
+                  <p className="text-white text-2xl font-black uppercase tracking-wide mb-1">
+                    {gameState.voteResult.eliminatedName}
+                  </p>
+                  <p className="text-sm font-bold uppercase tracking-wider" style={{ color: ROLE_INFO[gameState.voteResult.eliminatedRole!]?.color }}>
                     {ROLE_INFO[gameState.voteResult.eliminatedRole!]?.name}
-                  </span>
-                  .
-                </p>
+                  </p>
+                </div>
               </motion.div>
             ) : (
-              <motion.div
-                initial={{ scale: 0.8, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-              >
-                <div className="text-6xl mb-6">🤷</div>
-                <h2 className="text-3xl font-bold mb-2">
-                  {gameState.voteResult?.isTie
-                    ? "It's a tie!"
-                    : "No majority reached."}
+              <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}>
+                <div className="w-12 h-px bg-white/20 mx-auto mb-8" />
+                <h2 className="text-2xl font-black uppercase tracking-wider mb-2">
+                  {gameState.voteResult?.isTie ? "Tied Vote" : "No Majority"}
                 </h2>
-                <p className="text-white/50">No one was eliminated.</p>
+                <p className="text-muted-light text-sm mb-2">No one was eliminated</p>
               </motion.div>
             )}
 
-            {gameState.winner ? null : (
-              <button
-                onClick={handleNextRound}
-                className="mt-8 py-4 px-12 bg-blood-500 hover:bg-blood-600 text-white text-lg font-semibold rounded-2xl transition-colors"
-              >
+            {!gameState.winner && (
+              <button onClick={handleNextRound} className="mt-8 py-3.5 px-14 bg-accent-red hover:bg-accent-crimson text-white text-sm font-bold uppercase tracking-widest rounded-lg transition-colors">
                 Continue to Night
               </button>
             )}
           </motion.div>
         )}
 
-        {/* ─── GAME OVER ──────────────────────────────── */}
+        {/* ─── GAME OVER ──────────────────────────── */}
         {gameState.phase === "GAME_OVER" && (
-          <motion.div
-            key="gameover"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="relative z-10 text-center w-full max-w-md"
-          >
-            <motion.div
-              initial={{ scale: 0.5, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              transition={{ duration: 0.8, type: "spring" }}
-            >
-              <div className="text-7xl mb-6">
-                {gameState.winner === "VILLAGE" ? "🎉" : "💀"}
-              </div>
-              <h2 className="text-4xl font-bold mb-2">
-                {gameState.winner === "VILLAGE"
-                  ? "Village Wins!"
-                  : "Mafia Wins!"}
+          <motion.div key="gameover" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="relative z-10 text-center w-full max-w-md">
+            <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ duration: 0.6, type: "spring" }}>
+              <div className="w-16 h-px bg-accent-red mx-auto mb-8" />
+              <p className="text-muted text-xs uppercase tracking-[0.3em] mb-3">Game Over</p>
+              <h2 className="text-4xl font-black uppercase tracking-wider mb-2">
+                {gameState.winner === "VILLAGE" ? (
+                  <span className="text-white">Village Wins</span>
+                ) : (
+                  <span className="text-accent-red">Mafia Wins</span>
+                )}
               </h2>
-              <p className="text-white/50 mb-8">
+              <p className="text-muted-light text-sm mb-10">
                 {gameState.winner === "VILLAGE"
-                  ? "The town has found and eliminated all Mafia members."
+                  ? "All Mafia members have been found and eliminated."
                   : "The Mafia has taken over the town."}
               </p>
             </motion.div>
 
-            {/* Role reveal */}
-            <div className="space-y-2 mb-8">
-              <h3 className="text-white/40 text-sm uppercase tracking-wider mb-3">
-                All Roles
-              </h3>
+            <div className="space-y-1.5 mb-10">
+              <p className="text-muted text-xs uppercase tracking-[0.2em] mb-3">All Roles</p>
               {gameState.players.map((p) => {
                 const role = gameState.allRoles?.[p.id];
                 return (
-                  <div
-                    key={p.id}
-                    className="flex items-center justify-between bg-night-700/50 rounded-xl px-4 py-3"
-                  >
-                    <span
-                      className={
-                        p.isAlive ? "font-medium" : "font-medium line-through text-white/40"
-                      }
-                    >
+                  <div key={p.id} className="flex items-center justify-between bg-bg-card border border-white/5 rounded-lg px-4 py-3">
+                    <span className={p.isAlive ? "text-sm font-medium" : "text-sm font-medium line-through text-muted"}>
                       {p.name}
                     </span>
                     {role && (
-                      <span
-                        className="font-bold"
-                        style={{ color: ROLE_INFO[role].color }}
-                      >
-                        {ROLE_INFO[role].emoji} {ROLE_INFO[role].name}
+                      <span className="text-xs font-bold uppercase tracking-wider" style={{ color: ROLE_INFO[role].color }}>
+                        {ROLE_INFO[role].name}
                       </span>
                     )}
                   </div>
@@ -725,10 +577,7 @@ export default function HostPage() {
               })}
             </div>
 
-            <button
-              onClick={handleNewGame}
-              className="py-4 px-12 bg-blood-500 hover:bg-blood-600 text-white text-lg font-semibold rounded-2xl transition-colors"
-            >
+            <button onClick={handleNewGame} className="py-3.5 px-14 bg-accent-red hover:bg-accent-crimson text-white text-sm font-bold uppercase tracking-widest rounded-lg transition-colors">
               New Game
             </button>
           </motion.div>
@@ -738,33 +587,21 @@ export default function HostPage() {
   );
 }
 
-function AlivePlayerList({ players }: { players: PublicPlayer[] }) {
+function PlayerStatusList({ players }: { players: PublicPlayer[] }) {
   return (
-    <div className="space-y-2">
+    <div className="space-y-1.5">
       {players.map((p) => (
         <div
           key={p.id}
-          className={`flex items-center gap-3 rounded-xl px-4 py-3 ${
-            p.isAlive
-              ? "bg-night-700/50"
-              : "bg-night-700/20 opacity-40"
+          className={`flex items-center gap-3 rounded-lg px-4 py-2.5 ${
+            p.isAlive ? "bg-bg-card border border-white/5" : "bg-bg-card/50 border border-white/[0.02]"
           }`}
         >
-          <div
-            className={`w-3 h-3 rounded-full ${
-              p.isAlive ? "bg-green-500" : "bg-red-500"
-            }`}
-          />
-          <span
-            className={
-              p.isAlive ? "font-medium" : "font-medium line-through"
-            }
-          >
+          <div className={`w-2 h-2 rounded-full ${p.isAlive ? "bg-green-500" : "bg-accent-red"}`} />
+          <span className={p.isAlive ? "text-sm font-medium" : "text-sm font-medium line-through text-muted"}>
             {p.name}
           </span>
-          {!p.isAlive && (
-            <span className="text-white/30 text-sm ml-auto">Dead</span>
-          )}
+          {!p.isAlive && <span className="text-muted text-xs ml-auto uppercase tracking-wider">Dead</span>}
         </div>
       ))}
     </div>
